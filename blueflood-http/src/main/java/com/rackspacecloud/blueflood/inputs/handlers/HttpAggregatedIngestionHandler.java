@@ -26,7 +26,7 @@ import com.rackspacecloud.blueflood.concurrent.FunctionWithThreadPool;
 import com.rackspacecloud.blueflood.http.DefaultHandler;
 import com.rackspacecloud.blueflood.http.HttpRequestHandler;
 import com.rackspacecloud.blueflood.inputs.handlers.wrappers.AggregatedPayload;
-import com.rackspacecloud.blueflood.io.AstyanaxWriter;
+import com.rackspacecloud.blueflood.io.astyanax.AstyanaxWriter;
 import com.rackspacecloud.blueflood.io.CassandraModel;
 import com.rackspacecloud.blueflood.io.Constants;
 import com.rackspacecloud.blueflood.tracker.Tracker;
@@ -65,7 +65,7 @@ public class HttpAggregatedIngestionHandler implements HttpRequestHandler {
     @Override
     public void handle(ChannelHandlerContext ctx, HttpRequest request) {
 
-        Tracker.track(request);
+        Tracker.getInstance().track(request);
 
         final Timer.Context timerContext = handlerTimer.time();
 
@@ -75,16 +75,30 @@ public class HttpAggregatedIngestionHandler implements HttpRequestHandler {
             // block until things get ingested.
             requestCount.inc();
             MetricsCollection collection = new MetricsCollection();
-            collection.add(PreaggregateConversions.buildMetricsCollection(createPayload(body)));
-            ListenableFuture<List<Boolean>> futures = processor.apply(collection);
-            List<Boolean> persisteds = futures.get(timeout.getValue(), timeout.getUnit());
-            for (Boolean persisted : persisteds) {
-                if (!persisted) {
-                    DefaultHandler.sendResponse(ctx, request, null, HttpResponseStatus.INTERNAL_SERVER_ERROR);
-                    return;
+
+            AggregatedPayload payload = createPayload( body );
+
+            List<String> errors = payload.getValidationErrors();
+
+            if ( errors.isEmpty() ) {
+                collection.add( PreaggregateConversions.buildMetricsCollection( payload ) );
+                ListenableFuture<List<Boolean>> futures = processor.apply( collection );
+                List<Boolean> persisteds = futures.get( timeout.getValue(), timeout.getUnit() );
+                for ( Boolean persisted : persisteds ) {
+                    if ( !persisted ) {
+                        DefaultHandler.sendResponse( ctx, request, null, HttpResponseStatus.INTERNAL_SERVER_ERROR );
+                        return;
+                    }
                 }
+                DefaultHandler.sendResponse( ctx, request, null, HttpResponseStatus.OK );
             }
-            DefaultHandler.sendResponse(ctx, request, null, HttpResponseStatus.OK);
+            else {
+
+                DefaultHandler.sendResponse( ctx,
+                        request,
+                        HttpMetricsIngestionHandler.getResponseBody( errors ),
+                        HttpResponseStatus.BAD_REQUEST );
+            }
 
         } catch (JsonParseException ex) {
             log.debug(String.format("BAD JSON: %s", body));

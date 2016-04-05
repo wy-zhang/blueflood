@@ -23,15 +23,12 @@
   <artifactId>blueflood</artifactId>
   <name>Blueflood</name>
   <packaging>pom</packaging>
-  <version>2.0.0-SNAPSHOT</version>
+  <version>${BLUEFLOOD_VERSION}</version>
   <modules>
     <module>blueflood-core</module>
-    <module>blueflood-udp</module>
     <module>blueflood-elasticsearch</module>
     <module>blueflood-http</module>
-    <module>blueflood-kafka</module>
     <module>blueflood-cloudfiles</module>
-    <module>blueflood-io-datastax</module>
     <module>blueflood-rollupTools</module>
   </modules>
 
@@ -42,6 +39,8 @@
   <url>http://blueflood.io</url>
 
   <properties>
+    <VERSION_SUFFIX>0-SNAPSHOT</VERSION_SUFFIX>
+    <BLUEFLOOD_VERSION>2.0.${VERSION_SUFFIX}</BLUEFLOOD_VERSION>
     <maven.javadoc.skip>true</maven.javadoc.skip>
     <!-- Used to locate the profile specific configuration file. -->
     <build.profile.id>dev</build.profile.id>
@@ -54,7 +53,46 @@
     <slf4j.version>1.7.6</slf4j.version>
   </properties>
 
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.netflix.astyanax</groupId>
+        <artifactId>astyanax-core</artifactId>
+        <version>1.56.34</version>
+      </dependency>
+      <dependency>
+        <groupId>com.datastax.cassandra</groupId>
+        <artifactId>cassandra-driver-core</artifactId>
+        <version>3.0.0</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.codehaus.mojo</groupId>
+          <artifactId>build-helper-maven-plugin</artifactId>
+          <version>1.10</version>
+        </plugin>
+        <plugin>
+          <groupId>org.codehaus.mojo</groupId>
+          <artifactId>cassandra-maven-plugin</artifactId>
+          <version>${cassandra.plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>2.14.1</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <version>2.15</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -137,6 +175,7 @@
             <configuration>
               <portNames>
                 <portName>cassandra.rpcPort</portName>
+                <portName>cassandra.nativeTransportPort</portName>
                 <portName>cassandra.jmxPort</portName>
                 <portName>cassandra.storagePort</portName>
                 <portName>cassandra.stopPort</portName>
@@ -173,10 +212,12 @@
       <plugin>
         <groupId>org.eluder.coveralls</groupId>
         <artifactId>coveralls-maven-plugin</artifactId>
-        <version>3.0.1</version>
+        <version>4.1.0</version>
         <configuration>
           <jacocoReports>
+            <jacocoReport>blueflood-core/target/site/jacoco/jacoco.xml</jacocoReport>
             <jacocoReport>blueflood-core/target/site/jacoco-it/jacoco.xml</jacocoReport>
+            <jacocoReport>blueflood-http/target/site/jacoco/jacoco.xml</jacocoReport>
             <jacocoReport>blueflood-http/target/site/jacoco-it/jacoco.xml</jacocoReport>
           </jacocoReports>
         </configuration>
@@ -191,6 +232,7 @@
           <!--There are issues when running tests inside vmware fusion on a filesystem mounted from the host machine-->
           <cassandraDir>/tmp/bf-cassandra-${cassandra.plugin.version}/</cassandraDir>
           <loadFailureIgnore>false</loadFailureIgnore>
+          <startNativeTransport>true</startNativeTransport>
         </configuration>
         <executions>
           <execution>
@@ -241,6 +283,12 @@
       <id>all-modules</id>
       <modules>
         <module>blueflood-all</module>
+      </modules>
+    </profile>
+    <profile>
+      <id>logstash-support</id>
+      <modules>
+        <module>contrib/logstash-support</module>
       </modules>
     </profile>
     <profile>

@@ -17,7 +17,7 @@ package com.rackspacecloud.blueflood.inputs.handlers;
 
 import com.github.tlrx.elasticsearch.test.EsSetup;
 import com.rackspacecloud.blueflood.http.HttpClientVendor;
-import com.rackspacecloud.blueflood.io.AstyanaxMetricsWriter;
+import com.rackspacecloud.blueflood.io.astyanax.AstyanaxMetricsWriter;
 import com.rackspacecloud.blueflood.io.EventElasticSearchIO;
 import com.rackspacecloud.blueflood.io.EventsIO;
 import com.rackspacecloud.blueflood.outputs.handlers.HttpMetricDataQueryServer;
@@ -153,8 +153,17 @@ public class HttpAnnotationsEndToEndTest {
     @AfterClass
     public static void tearDownClass() throws Exception{
         Configuration.getInstance().setProperty(CoreConfig.EVENTS_MODULES.name(), "");
+        System.clearProperty(CoreConfig.EVENTS_MODULES.name());
         if (esSetup != null) {
             esSetup.terminate();
+        }
+
+        if (vendor != null) {
+            vendor.shutdown();
+        }
+
+        if (httpIngestionService != null) {
+            httpIngestionService.shutdownService();
         }
 
         if (httpQueryService != null) {

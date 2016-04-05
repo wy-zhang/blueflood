@@ -16,7 +16,9 @@
 
 package com.rackspacecloud.blueflood.service;
 
-import com.rackspacecloud.blueflood.io.AstyanaxShardStateIO;
+import com.codahale.metrics.MetricRegistry;
+import com.rackspacecloud.blueflood.io.IOContainer;
+import com.rackspacecloud.blueflood.io.ShardStateIO;
 import com.rackspacecloud.blueflood.cache.MetadataCache;
 import com.rackspacecloud.blueflood.io.IMetricsWriter;
 import com.rackspacecloud.blueflood.utils.Metrics;
@@ -42,12 +44,12 @@ public class BluefloodServiceStarter {
         String hosts = Configuration.getInstance().getStringProperty(CoreConfig.CASSANDRA_HOSTS);
         if (!(hosts.length() >= 3)) {
             log.error("No cassandra hosts found in configuration option 'CASSANDRA_HOSTS'");
-            System.exit(-1);
+            throw new BluefloodServiceStarterException(-1, "No cassandra hosts found in configuration option 'CASSANDRA_HOSTS'");
         }
         for (String host : hosts.split(",")) {
             if (!host.matches("[\\d\\w\\.]+:\\d+")) {
                 log.error("Invalid Cassandra host found in Configuration option 'CASSANDRA_HOSTS' -- Should be of the form <hostname>:<port>");
-                System.exit(-1);
+                throw new BluefloodServiceStarterException(-1, "Invalid Cassandra host found in Configuration option 'CASSANDRA_HOSTS' -- Should be of the form <hostname>:<port>");
             }
         }
     }
@@ -59,7 +61,7 @@ public class BluefloodServiceStarter {
             final Collection<Integer> allShards = Collections.unmodifiableCollection(Util.parseShards("ALL"));
 
             try {
-                final AstyanaxShardStateIO io = new AstyanaxShardStateIO();
+                final ShardStateIO io = IOContainer.fromConfig().getShardStateIO();
                 final ShardStatePusher shardStatePusher = new ShardStatePusher(allShards,
                         context.getShardStateManager(),
                         io);
@@ -89,7 +91,7 @@ public class BluefloodServiceStarter {
             List<String> modules = config.getListProperty(CoreConfig.INGESTION_MODULES);
             if (modules.isEmpty()) {
                 log.error("Ingestion mode is enabled, however no ingestion modules are enabled!");
-                System.exit(1);
+                throw new BluefloodServiceStarterException(1, "Ingestion mode is enabled, however no ingestion modules are enabled!");
             }
             ClassLoader classLoader = IngestionService.class.getClassLoader();
             final List<IngestionService> ingestionServices = new ArrayList<IngestionService>();
@@ -110,21 +112,27 @@ public class BluefloodServiceStarter {
                     services_started++;
                 } catch (InstantiationException e) {
                     log.error("Unable to create instance of ingestion service class for: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Unable to create instance of ingestion service class for: " + module, e);
                 } catch (IllegalAccessException e) {
                     log.error("Error starting ingestion service: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Error starting ingestion service: " + module, e);
                 } catch (ClassNotFoundException e) {
                     log.error("Unable to locate ingestion service module: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Unable to locate ingestion service module: " + module, e);
                 } catch (RuntimeException e) {
                     log.error("Error starting ingestion service: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Error starting ingestion service: " + module, e);
                 } catch (Throwable e) {
                     log.error("Error starting ingestion service: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Error starting ingestion service: " + module, e);
                 }
             }
+
+            final Thread eerThread = new Thread(ExcessEnumReader.getInstance(), "Excess Enum Table Reader");
+            eerThread.start();
+            log.info("Started Excess Enum Reader ingestion service");
+            services_started++;
+
             log.info("Started " + services_started + " ingestion services");
         } else {
             log.info("HTTP ingestion service not required");
@@ -138,7 +146,7 @@ public class BluefloodServiceStarter {
             List<String> modules = config.getListProperty(CoreConfig.QUERY_MODULES);
             if (modules.isEmpty()) {
                 log.error("Query mode is enabled, however no query modules are enabled!");
-                System.exit(1);
+                throw new BluefloodServiceStarterException(1, "Query mode is enabled, however no query modules are enabled!");
             }
             ClassLoader classLoader = QueryService.class.getClassLoader();
             final List<QueryService> queryServices = new ArrayList<QueryService>();
@@ -155,19 +163,19 @@ public class BluefloodServiceStarter {
                     services_started++;
                 } catch (InstantiationException e) {
                     log.error("Unable to create instance of query service class for: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Unable to create instance of query service class for: " + module, e);
                 } catch (IllegalAccessException e) {
                     log.error("Error starting query service: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Error starting query service: " + module, e);
                 } catch (ClassNotFoundException e) {
                     log.error("Unable to locate query service module: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Unable to locate query service module: " + module, e);
                 } catch (RuntimeException e) {
                     log.error("Error starting query service: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Error starting query service: " + module, e);
                 } catch (Throwable e) {
                     log.error("Error starting query service: " + module, e);
-                    System.exit(1);
+                    throw new BluefloodServiceStarterException(1, "Error starting query service: " + module, e);
                 }
             }
             log.info("Started " + services_started + " query services");
@@ -242,6 +250,13 @@ public class BluefloodServiceStarter {
     }
 
     public static void main(String args[]) {
+        try {
+            run();
+        } catch (BluefloodServiceStarterException e) {
+            System.exit(e.status);
+        }
+    }
+    public static void run() {
         // load configuration.
         Configuration config = Configuration.getInstance();
 
@@ -290,14 +305,12 @@ public class BluefloodServiceStarter {
         }
 
         // has the side-effect of causing static initialization of Metrics, starting instrumentation reporting.
-        new RestartGauge(Metrics.getRegistry(), RollupService.class);
+        new RestartGauge(getRegistry(), RollupService.class);
 
         final Collection<Integer> shards = Collections.unmodifiableCollection(
                 Util.parseShards(config.getStringProperty(CoreConfig.SHARDS)));
-        final String zkCluster = config.getStringProperty(CoreConfig.ZOOKEEPER_CLUSTER);
-        final ScheduleContext rollupContext = "NONE".equals(zkCluster) ?
-                new ScheduleContext(System.currentTimeMillis(), shards) :
-                new ScheduleContext(System.currentTimeMillis(), shards, zkCluster);
+        final ScheduleContext rollupContext =
+                new ScheduleContext(System.currentTimeMillis(), shards);
 
         log.info("Starting blueflood services");
         startShardStateServices(rollupContext);
@@ -307,4 +320,9 @@ public class BluefloodServiceStarter {
         startEventListenerModules();
         log.info("All blueflood services started");
     }
+
+    public static MetricRegistry getRegistry() {
+        return Metrics.getRegistry();
+    }
+
 }

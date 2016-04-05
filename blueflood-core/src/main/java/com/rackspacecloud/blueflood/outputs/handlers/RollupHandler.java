@@ -24,7 +24,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.rackspacecloud.blueflood.concurrent.ThreadPoolBuilder;
-import com.rackspacecloud.blueflood.io.AstyanaxReader;
+import com.rackspacecloud.blueflood.io.astyanax.AstyanaxReader;
 import com.rackspacecloud.blueflood.io.DiscoveryIO;
 import com.rackspacecloud.blueflood.io.SearchResult;
 import com.rackspacecloud.blueflood.outputs.formats.MetricData;
@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -53,6 +54,7 @@ public class RollupHandler {
     protected final Meter rollupsRepairEntireRangeEmpty = Metrics.meter(RollupHandler.class, "BF-API", "Rollups repaired - entire range - no data");
     protected final Meter rollupsRepairedLeftEmpty = Metrics.meter(RollupHandler.class, "BF-API", "Rollups repaired - left - no data");
     protected final Meter rollupsRepairedRightEmpty = Metrics.meter(RollupHandler.class, "BF-API", "Rollups repaired - right - no data");
+    protected final Map<RollupType, Meter> queriesByRollupTypeMeters = new HashMap< RollupType, Meter>();
     protected static final Timer metricsFetchTimer = Metrics.timer(RollupHandler.class, "Get metrics from db");
     protected static final Timer metricsFetchTimerMPlot = Metrics.timer(RollupHandler.class, "Get metrics from db - mplot");
     protected static final Timer rollupsCalcOnReadTimer = Metrics.timer(RollupHandler.class, "Rollups calculation on read");
@@ -63,17 +65,29 @@ public class RollupHandler {
     private static final Meter exceededQueryTimeout = Metrics.meter(RollupHandler.class, "Batched Metrics Query Duration Exceeded Timeout");
     private static final Histogram queriesSizeHist = Metrics.histogram(RollupHandler.class, "Total queries");
 
+    private static final Timer timerCassandraReadRollupOnRead = Metrics.timer( RollupHandler.class, "cassandraReadForRollupOnRead" );
+    private static final Timer timerRepairRollupsOnRead = Metrics.timer( RollupHandler.class, "repairRollupsOnRead" );
+    private static final Timer timerRorCalcUnits = Metrics.timer( RollupHandler.class, "ROR Calc Units" );
+
     private static final boolean ROLLUP_REPAIR = Configuration.getInstance().getBooleanProperty(CoreConfig.REPAIR_ROLLUPS_ON_READ);
+    private static final int ROLLUP_ON_READ_REPAIR_SIZE_PER_THREAD = Configuration.getInstance().getIntegerProperty( CoreConfig.ROLLUP_ON_READ_REPAIR_SIZE_PER_THREAD );
     private ExecutorService ESUnitExecutor = null;
     private ListeningExecutorService rollupsOnReadExecutor = null;
+    private ListeningExecutorService createRepairPointsExecutor = null;
     /*
       Timeout for rollups on read applicable only when operations are done async. for sync rollups on read
       it will be the astyanax operation timeout.
-      TODO: Hard-coded for now, make configurable if need be
      */
-    private TimeValue rollupOnReadTimeout = new TimeValue(10, TimeUnit.SECONDS);
+    private TimeValue rollupOnReadTimeout = new TimeValue(
+                                                Configuration.getInstance().getIntegerProperty(CoreConfig.ROLLUP_ON_READ_TIMEOUT_IN_SECONDS),
+                                                TimeUnit.SECONDS);
 
     public RollupHandler() {
+
+        // TODO:  we can iterate over the enums and create Meters for each type
+        // currently we only initialize this for type ENUM.
+        queriesByRollupTypeMeters.put( RollupType.ENUM, Metrics.meter( RollupHandler.class, RollupType.ENUM.toString() + " queries" ) );
+
         if (Util.shouldUseESForUnits()) {
             // The number of threads getting used for ES_UNIT_THREADS, should at least be equal netty worker threads
             int ESthreadCount = Configuration.getInstance().getIntegerProperty(CoreConfig.ES_UNIT_THREADS);
@@ -88,6 +102,12 @@ public class RollupHandler {
                     .withName("Rollups on Read Executors").build();
             rollupsOnReadExecutor = MoreExecutors.listeningDecorator(rollupsOnReadExecutors);
         }
+
+        ThreadPoolExecutor createRepairrollupsOnReadExecutors = new ThreadPoolBuilder().withUnboundedQueue()
+                .withCorePoolSize( Configuration.getInstance().getIntegerProperty(CoreConfig.ROLLUP_ON_READ_REPAIR_THREADS ))
+                .withMaxPoolSize( Configuration.getInstance().getIntegerProperty( CoreConfig.ROLLUP_ON_READ_REPAIR_THREADS ) )
+                .withName( "Create Repair Points Rollups on Read Executors" ).build();
+        createRepairPointsExecutor = MoreExecutors.listeningDecorator(createRepairrollupsOnReadExecutors);
     }
 
     private enum plotTimers {
@@ -121,6 +141,8 @@ public class RollupHandler {
         Future<List<SearchResult>> unitsFuture = null;
         List<SearchResult> units = null;
         List<Locator> locators = new ArrayList<Locator>();
+
+        Timer.Context c = timerRorCalcUnits.time();
 
         for (String metric : metrics) {
             locators.add(Locator.createLocatorFromPathComponents(tenantId, metric));
@@ -158,11 +180,12 @@ public class RollupHandler {
                         metricDataMap.get(locator).setUnit(searchResult.getUnit());
                 }
             } catch (Exception e) {
-                log.warn("Exception encountered while getting units from ES, unit will be set to unknown in query results");
-                log.debug(e.getMessage(), e);
+                log.warn("Exception encountered while getting units from ES, unit will be set to unknown in query results", e);
             }
         }
 
+        c.stop();
+        
         if (locators.size() == 1) {
             for (final Map.Entry<Locator, MetricData> metricData : metricDataMap.entrySet()) {
                 Timer.Context context = rollupsOnReadTimers.RR_SPLOT_TIMER.timer.time();
@@ -187,12 +210,37 @@ public class RollupHandler {
             } catch (Exception e) {
                 aggregateFuture.cancel(true);
                 exceededQueryTimeout.mark();
-                log.warn(String.format("Exception encountered while doing rollups on read, incomplete rollups will be returned. %s", e.getMessage()));
+                log.warn("Exception encountered while doing rollups on read, incomplete rollups will be returned.", e);
             }
             context.stop();
         }
+
+        for( MetricData metricData : metricDataMap.values() ){
+
+            // currently this only tracks enum queries
+            markQueryByRollupType( metricData );
+        }
+
         ctx.stop();
         return metricDataMap;
+    }
+
+    /**
+     * Marks queries based on RollupType.
+     *
+     * NOTE:  currently the map is only initialized with RollupType.ENUM, and therefore, only ENUMs are tracked.
+     *
+     * @param metricData
+     */
+    private void markQueryByRollupType( MetricData metricData ) {
+
+        if( !metricData.getData().isEmpty() ) {
+            RollupType type = RollupType.fromRollupTypeClass( metricData.getData().getDataClass() );
+
+            if ( queriesByRollupTypeMeters.containsKey( type ) ) {
+                queriesByRollupTypeMeters.get( type ).mark();
+            }
+        }
     }
 
     private Boolean repairMetrics (Locator locator, MetricData metricData, final long from,
@@ -255,24 +303,111 @@ public class RollupHandler {
         return retValue;
     }
 
-    private List<Points.Point> repairRollupsOnRead(Locator locator, Granularity g, long from, long to) {
+    /**
+     * This method gets the points from the DB and then rolls them up according to the granularity.
+     *
+     * Breaks up the number of ranges into buckets based on ROLLUP_ON_READ_REPAIR_SIZE_PER_THREAD and executes
+     * the buckets in parallel.
+     *
+     * @param locator metric key within the DB
+     * @param g the granularity
+     * @param from the starting timestamp of the range (ms)
+     * @param to the ending timestamp of the range (ms)
+     *
+     * @return a list of rolled-up points
+     */
+    private List<Points.Point> repairRollupsOnRead(final Locator locator, Granularity g, long from, long to) {
+        Timer.Context c = timerRepairRollupsOnRead.time();
+
+        List<Points.Point> repairedPoints = new ArrayList<Points.Point>();
+        List<ListenableFuture<List<Points.Point>>> futures = new ArrayList<ListenableFuture<List<Points.Point>>>();
+
+        for( final Iterable<Range> ranges : divideRangesByGroup( g, from, to ) ) {
+            futures.add(
+
+                    createRepairPointsExecutor.submit( new Callable() {
+
+                        @Override
+                        public List<Points.Point> call() throws Exception {
+                            return createRepairPoints( ranges, locator );
+                        }
+                    } ) );
+        }
+
+        ListenableFuture<List<List<Points.Point>>> aggregateFuture = Futures.allAsList(futures);
+
+        try {
+            for( List<Points.Point> subList : aggregateFuture.get(rollupOnReadTimeout.getValue(), rollupOnReadTimeout.getUnit()) ) {
+
+                repairedPoints.addAll( subList );
+            }
+        } catch (Exception e) {
+            aggregateFuture.cancel(true);
+            exceededQueryTimeout.mark();
+            log.warn("Exception encountered while doing rollups on read, incomplete rollups will be returned.", e);
+        }
+
+        c.stop();
+
+        return repairedPoints;
+    }
+
+    /**
+     * Create a list of groups of ranges based on the to, from, granularity, and ROLLUP_ON_READ_REPAIR_SIZE_PER_THREAD.
+     *
+     * @param g the granularity
+     * @param from the starting timestamp of the range (ms)
+     * @param to the ending timestamp of the range (ms)
+     *
+     * @return A list of iterables of ranges, each iterable list is no bigger than ROLLUP_ON_READ_REPAIR_SIZE_PER_THREAD
+     */
+    private List<Iterable<Range>> divideRangesByGroup( Granularity g, long from, long to ) {
+        List<Iterable<Range>> listRange = new ArrayList<Iterable<Range>>();
+
+        long rangeSize = ROLLUP_ON_READ_REPAIR_SIZE_PER_THREAD * g.milliseconds();
+
+        for ( long start = from; start < to ; ) {
+
+            long end = (start + rangeSize) < to ? (start + rangeSize ) : to;
+
+            listRange.add( Range.rangesForInterval( g, start, end ) );
+
+            start = end;
+        }
+        return listRange;
+    }
+
+    /**
+     * Returns a list of points for a set of ranges. Each range is rolled up into a single point.
+     *
+     * @param ranges list of ranges, each range is a single point
+     * @param locator metric key within the DB
+     *
+     * @return list of points, one for each range
+     */
+    private List<Points.Point> createRepairPoints( Iterable<Range> ranges, Locator locator ) {
+
         List<Points.Point> repairedPoints = new ArrayList<Points.Point>();
 
-        Iterable<Range> ranges = Range.rangesForInterval(g, g.snapMillis(from), to);
-        for (Range r : ranges) {
+        for ( Range r : ranges ) {
             try {
-                MetricData data = AstyanaxReader.getInstance().getDatapointsForRange(locator, r, Granularity.FULL);
+                Timer.Context cRead = timerCassandraReadRollupOnRead.time();
+                MetricData data = AstyanaxReader.getInstance().getDatapointsForRange( locator, r, Granularity.FULL );
+                cRead.stop();
+
                 Points dataToRoll = data.getData();
-                if (dataToRoll.isEmpty()) {
+                if ( dataToRoll.isEmpty() ) {
                     continue;
                 }
-                Rollup rollup = RollupHandler.rollupFromPoints(dataToRoll);
 
-                if (rollup.hasData()) {
-                    repairedPoints.add(new Points.Point(r.getStart(), rollup));
+                Rollup rollup = RollupHandler.rollupFromPoints( dataToRoll );
+
+                if ( rollup.hasData() ) {
+                    repairedPoints.add( new Points.Point( r.getStart(), rollup ) );
                 }
-            } catch (IOException ex) {
-                log.error("Exception computing rollups during read: ", ex);
+
+            } catch ( IOException ex ) {
+                log.error( "Exception computing rollups during read: ", ex );
             }
         }
 
@@ -306,6 +441,8 @@ public class RollupHandler {
             return Rollup.TimerFromTimer.compute(points);
         } else if (rollupTypeClass.equals(BluefloodGaugeRollup.class)) {
             return Rollup.GaugeFromGauge.compute(points);
+        } else if (rollupTypeClass.equals(BluefloodEnumRollup.class)) {
+            return Rollup.EnumFromEnum.compute(points);
         } else {
             throw new IOException(String.format("Unexpected rollup type: %s", rollupTypeClass.getSimpleName()));
         }

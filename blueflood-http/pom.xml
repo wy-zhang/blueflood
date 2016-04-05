@@ -22,7 +22,8 @@
   <parent>
     <artifactId>blueflood</artifactId>
     <groupId>com.rackspacecloud</groupId>
-    <version>2.0.0-SNAPSHOT</version>
+    <relativePath>../pom.xml</relativePath>
+    <version>${BLUEFLOOD_VERSION}</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
 
@@ -37,10 +38,9 @@
   <build>
     <testResources>
       <testResource>
-        <directory>src/integration-test/java</directory>
+        <directory>src/test/resources</directory>
       </testResource>
     </testResources>
-
 
     <plugins>
       <!-- Used to add source directories to our build. -->
@@ -72,6 +72,7 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>2.14.1</version>
         <configuration>
+          <forkMode>always</forkMode>
           <!-- Skips unit tests if the value of skip.unit.tests property is true -->
           <skipTests>${skip.unit.tests}</skipTests>
           <!-- Excludes integration tests when unit tests are run. -->
@@ -101,10 +102,7 @@
                 <DEFAULT_CASSANDRA_PORT>${cassandra.rpcPort}</DEFAULT_CASSANDRA_PORT>
               </systemPropertyVariables>
               <testSourceDirectory>src/integration-test/java</testSourceDirectory>
-              <!-- do not require zookeeper for these tests. -->
-              <argLine>-DZOOKEEPER_CLUSTER=NONE</argLine>
-              <argLine>-Dlog4j.configuration=file://${basedir}/src/test/resources/log4j-test.properties</argLine>
-              <argLine>${jacoco.agent.it.argLine}</argLine>
+              <argLine>-Dlog4j.configuration=file://${basedir}/src/test/resources/log4j-test.properties ${jacoco.agent.it.argLine} -Xmx1024m -XX:MaxPermSize=256m</argLine>
               <!-- Skips integration tests if the value of skip.integration.tests property is true -->
               <skipTests>${skip.integration.tests}</skipTests>
               <includes>
@@ -129,6 +127,13 @@
       <artifactId>blueflood-core</artifactId>
       <groupId>com.rackspacecloud</groupId>
       <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
+      <artifactId>blueflood-core</artifactId>
+      <groupId>com.rackspacecloud</groupId>
+      <version>${project.version}</version>
+      <type>test-jar</type>
     </dependency>
 
     <dependency>
@@ -173,7 +178,13 @@
       <version>4.3.3</version>
     </dependency>
 
-    <!-- testing dependencies -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-io</artifactId>
+      <version>1.3.2</version>
+    </dependency>
+
+      <!-- testing dependencies -->
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
@@ -185,9 +196,21 @@
     <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-all</artifactId>
-      <version>1.8.4</version>
+      <version>1.10.19</version>
       <scope>test</scope>
       <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.powermock</groupId>
+      <artifactId>powermock-module-junit4</artifactId>
+      <version>1.6.4</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.powermock</groupId>
+      <artifactId>powermock-api-mockito</artifactId>
+      <version>1.6.4</version>
     </dependency>
 
     <dependency>
@@ -197,7 +220,6 @@
       <scope>test</scope>
       <optional>true</optional>
     </dependency>
-
   </dependencies>
 
 </project>

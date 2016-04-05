@@ -106,9 +106,11 @@ public interface BasicRollupsOutputSerializer<T> {
                 else if (rollup instanceof BluefloodTimerRollup)
                     return ((BluefloodTimerRollup) rollup).getCount();
                 else if (rollup instanceof BluefloodCounterRollup)
-                    return ((BluefloodCounterRollup) rollup).getCount();
+                    return ((BluefloodCounterRollup) rollup).getSampleCount();
                 else if (rollup instanceof BluefloodSetRollup)
                     return ((BluefloodSetRollup) rollup).getCount();
+                else if (rollup instanceof BluefloodEnumRollup)
+                    return ((BluefloodEnumRollup) rollup).getNumPoints();
                 else
                     // gauge.
                     throw new Exception(String.format("numPoints not supported for this type: %s", rollup.getClass().getSimpleName()));
@@ -176,6 +178,36 @@ public interface BasicRollupsOutputSerializer<T> {
                 else
                     // every other type.
                     throw new Exception(String.format("percentiles supported for this type: %s", rollup.getClass().getSimpleName()));
+            }
+
+            @Override
+            Object convertRawSampleToObject(Object rawSample) {
+                return rawSample;
+            }
+        },
+        ENUM_VALUES("enum_values") {
+            @Override
+            Object convertRollupToObject(Rollup rollup) throws Exception {
+                if (rollup instanceof BluefloodEnumRollup)
+                    return ((BluefloodEnumRollup) rollup).getStringEnumValuesWithCounts();
+                else
+                    // every other type.
+                    throw new Exception(String.format("Enum values supported for this type: %s", rollup.getClass().getSimpleName()));
+            }
+
+            @Override
+            Object convertRawSampleToObject(Object rawSample) {
+                return rawSample;
+            }
+        },
+        TYPE("type") {
+            @Override
+            Object convertRollupToObject(Rollup rollup) throws Exception {
+                if (rollup instanceof BluefloodEnumRollup)
+                    return MetricData.Type.ENUM;
+                else
+                    // every other type.
+                    throw new Exception(String.format("Enum values supported for this type: %s", rollup.getClass().getSimpleName()));
             }
 
             @Override

@@ -18,7 +18,7 @@ package com.rackspacecloud.blueflood.cache;
 
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.Table;
-import com.rackspacecloud.blueflood.io.AstyanaxMetadataIO;
+import com.rackspacecloud.blueflood.io.astyanax.AstyanaxMetadataIO;
 import com.rackspacecloud.blueflood.io.IntegrationTestBase;
 import com.rackspacecloud.blueflood.service.Configuration;
 import com.rackspacecloud.blueflood.service.CoreConfig;
@@ -95,8 +95,8 @@ public class MetadataCacheBatchedModeIntegrationTest extends IntegrationTestBase
     // TODO: Ideally, Configuration has setXXX methods so we don't have to do this.
     @After
     public void tearDown() throws Exception {
-        System.setProperty(CoreConfig.META_CACHE_BATCHED_WRITES.name(), "false");
-        System.setProperty(CoreConfig.META_CACHE_BATCHED_READS.name(), "false");
+        System.clearProperty(CoreConfig.META_CACHE_BATCHED_WRITES.name());
+        System.clearProperty(CoreConfig.META_CACHE_BATCHED_READS.name());
         Configuration.getInstance().init();
     }
 }

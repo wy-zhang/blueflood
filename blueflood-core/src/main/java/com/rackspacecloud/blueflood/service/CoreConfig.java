@@ -22,8 +22,22 @@ package com.rackspacecloud.blueflood.service;
 public enum CoreConfig implements ConfigDefaults {
     CASSANDRA_HOSTS("127.0.0.1:19180"),
     DEFAULT_CASSANDRA_PORT("19180"),
-    // This number is only accurate if MAX_CASSANDRA_CONNECTIONS is evenly divisible by number of hosts
+    CASSANDRA_BINXPORT_HOSTS("localhost:9042"),
+    CASSANDRA_BINXPORT_PORT("9042"),
+
+    // This number is only accurate if MAX_CASSANDRA_CONNECTIONS
+    // is evenly divisible by number of hosts. For its connection
+    // pool, the driver class calculate the max number of
+    // connections per host, by dividing this number with
+    // the number of hosts.
     MAX_CASSANDRA_CONNECTIONS("75"),
+
+    // This is the number of initial connections
+    // to be created by the connection pool of the
+    // datastax driver
+    INITIAL_CASSANDRA_CONNECTIONS("15"),
+
+    CASSANDRA_DRIVER("astyanax"),
 
     ROLLUP_KEYSPACE("DATA"),
     CLUSTER_NAME("Test Cluster"),
@@ -31,6 +45,7 @@ public enum CoreConfig implements ConfigDefaults {
     INGESTION_MODULES(""),
     QUERY_MODULES(""),
     DISCOVERY_MODULES(""),
+    ENUMS_DISCOVERY_MODULES(""),
     EVENT_LISTENER_MODULES(""),
     EVENTS_MODULES(""),
 
@@ -75,16 +90,12 @@ public enum CoreConfig implements ConfigDefaults {
     SHARD_PUSH_PERIOD("2000"),
     SHARD_PULL_PERIOD("20000"),
 
-    // blueflood uses zookeeper to acquire locks before working on shards
-    ZOOKEEPER_CLUSTER("127.0.0.1:22181"),
-
     // 20 min
     SHARD_LOCK_HOLD_PERIOD_MS("1200000"),
     // 1 min
     SHARD_LOCK_DISINTERESTED_PERIOD_MS("60000"),
     // 2 min
     SHARD_LOCK_SCAVENGE_INTERVAL_MS("120000"),
-    MAX_ZK_LOCKS_TO_ACQUIRE_PER_CYCLE("1"),
 
     INTERNAL_API_CLUSTER("127.0.0.1:50020,127.0.0.1:50020"),
 
@@ -130,7 +141,7 @@ public enum CoreConfig implements ConfigDefaults {
     // valid options are: GEOMETRIC, LINEAR, and LESSTHANEQUAL
     GET_BY_POINTS_GRANULARITY_SELECTION("GEOMETRIC"),
 
-    IMETRICS_WRITER("com.rackspacecloud.blueflood.io.AstyanaxMetricsWriter"),
+    IMETRICS_WRITER("com.rackspacecloud.blueflood.io.astyanax.AstyanaxMetricsWriter"),
 
     METADATA_CACHE_PERSISTENCE_ENABLED("false"),
     METADATA_CACHE_PERSISTENCE_PATH("/dev/null"),
@@ -145,10 +156,23 @@ public enum CoreConfig implements ConfigDefaults {
     USE_ES_FOR_UNITS("false"),
     // Should at least be equal to the number of the netty worker threads, if http module is getting loaded
     ES_UNIT_THREADS("50"),
+    ENUM_READ_THREADS("20"),
     ROLLUP_ON_READ_THREADS("50"),
     TURN_OFF_RR_MPLOT("false"),
+    ROLLUP_ON_READ_REPAIR_THREADS("250"),
+    ROLLUP_ON_READ_REPAIR_SIZE_PER_THREAD( "5" ),
+    ROLLUP_ON_READ_TIMEOUT_IN_SECONDS("10"),
 
-    DELAYED_METRICS_MILLIS("300000");
+    DELAYED_METRICS_MILLIS("300000"),
+    ENUM_VALIDATOR_THREADS("20"),
+    ENUM_UNIQUE_VALUES_THRESHOLD("100"),
+    ENUM_VALIDATOR_ENABLED("true"),
+    EXCESS_ENUM_READER_SLEEP("600000"),
+    // 3 days - this matches the TTL for our metrics_full table, we don't accept anything older than the TTL.
+    BEFORE_CURRENT_COLLECTIONTIME_MS("259200000"),
+    // 10 minutes
+    AFTER_CURRENT_COLLECTIONTIME_MS("600000");
+
 
     static {
         Configuration.getInstance().loadDefaults(CoreConfig.values());

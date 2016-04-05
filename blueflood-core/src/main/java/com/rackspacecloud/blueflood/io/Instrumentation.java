@@ -21,7 +21,6 @@ import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
 import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
 import com.netflix.astyanax.connectionpool.exceptions.PoolTimeoutException;
-import com.netflix.astyanax.model.ColumnFamily;
 import com.rackspacecloud.blueflood.utils.Metrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,20 +36,27 @@ public class Instrumentation implements InstrumentationMBean {
     private static final Meter writeErrMeter;
     private static final Meter readErrMeter;
     private static final Meter batchReadErrMeter;
+    private static final Meter excessEnumWriteErrMeter;
+    private static final Meter excessEnumReadErrMeter;
 
     // One-off meters
     private static final Meter scanAllColumnFamiliesMeter;
     private static final Meter allPoolsExhaustedException;
     private static final Meter fullResMetricWritten;
+    private static final Meter enumMetricWritten;
 
     static {
         Class kls = Instrumentation.class;
+        excessEnumWriteErrMeter = Metrics.meter( kls, "writes", "Excess Enum Metrics Write Errors" );
+        excessEnumReadErrMeter = Metrics.meter( kls, "reads", "Excess Enum Metrics Read Errors" );
         writeErrMeter = Metrics.meter(kls, "writes", "Cassandra Write Errors");
         readErrMeter = Metrics.meter(kls, "reads", "Cassandra Read Errors");
         batchReadErrMeter = Metrics.meter(kls, "reads", "Batch Cassandra Read Errors");
         scanAllColumnFamiliesMeter = Metrics.meter(kls, "Scan all ColumnFamilies");
         allPoolsExhaustedException = Metrics.meter(kls, "All Pools Exhausted");
         fullResMetricWritten = Metrics.meter(kls, "Full Resolution Metrics Written");
+        enumMetricWritten = Metrics.meter( kls, "Enum Metrics Written" );
+
             try {
                 final MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
                 final String name = String.format("com.rackspacecloud.blueflood.io:type=%s", Instrumentation.class.getSimpleName());
@@ -63,19 +69,19 @@ public class Instrumentation implements InstrumentationMBean {
 
     private Instrumentation() {/* Used for JMX exposure */}
 
-    public static Timer.Context getReadTimerContext(ColumnFamily queryCF) {
+    public static Timer.Context getReadTimerContext(String queryCF) {
         return readTimers.getTimerContext(queryCF, false);
     }
 
-    public static Timer.Context getBatchReadTimerContext(ColumnFamily queryCF) {
+    public static Timer.Context getBatchReadTimerContext(String queryCF) {
         return readTimers.getTimerContext(queryCF, true);
     }
 
-    public static Timer.Context getWriteTimerContext(ColumnFamily queryCF) {
+    public static Timer.Context getWriteTimerContext(String queryCF) {
         return writeTimers.getTimerContext(queryCF, false);
     }
 
-    public static Timer.Context getBatchWriteTimerContext(ColumnFamily queryCF) {
+    public static Timer.Context getBatchWriteTimerContext(String queryCF) {
         return writeTimers.getTimerContext(queryCF, true);
     }
 
@@ -107,6 +113,10 @@ public class Instrumentation implements InstrumentationMBean {
         writeErrMeter.mark();
     }
 
+    public static void markExcessEnumWriteError() { excessEnumWriteErrMeter.mark(); }
+
+    public static void markExcessEnumReadError() { excessEnumReadErrMeter.mark(); }
+
     public static void markWriteError(ConnectionException e) {
         markWriteError();
         if (e instanceof PoolTimeoutException) {
@@ -115,8 +125,8 @@ public class Instrumentation implements InstrumentationMBean {
     }
 
     private static class ReadTimers {
-        public Timer.Context getTimerContext(ColumnFamily queryCF, boolean batch) {
-            final String metricName = (batch ? MetricRegistry.name("batched-", queryCF.getName()) : queryCF.getName());
+        public Timer.Context getTimerContext(String queryCF, boolean batch) {
+            final String metricName = (batch ? MetricRegistry.name("batched-", queryCF) : queryCF);
 
             final Timer timer = Metrics.timer(Instrumentation.class, "reads", metricName);
             return timer.time();
@@ -124,16 +134,16 @@ public class Instrumentation implements InstrumentationMBean {
     }
 
     private static class WriteTimers {
-        public Timer.Context getTimerContext(ColumnFamily queryCF, boolean batch) {
-            final String metricName = (batch ? MetricRegistry.name("batched", queryCF.getName()) : queryCF.getName());
+        public Timer.Context getTimerContext(String queryCF, boolean batch) {
+            final String metricName = (batch ? MetricRegistry.name("batched", queryCF) : queryCF);
 
             final Timer timer = Metrics.timer(Instrumentation.class, "writes", metricName);
             return timer.time();
         }
     }
 
-    public static void markNotFound(ColumnFamily CF) {
-        final Meter meter = Metrics.meter(Instrumentation.class, "reads", "Not Found", CF.getName());
+    public static void markNotFound(String columnFamilyName) {
+        final Meter meter = Metrics.meter(Instrumentation.class, "reads", "Not Found", columnFamilyName);
         meter.mark();
 
     }
@@ -145,6 +155,8 @@ public class Instrumentation implements InstrumentationMBean {
     public static void markFullResMetricWritten() {
         fullResMetricWritten.mark();
     }
-}
 
-interface InstrumentationMBean {}
+    public static void markEnumMetricWritten() {
+        enumMetricWritten.mark();
+    }
+}

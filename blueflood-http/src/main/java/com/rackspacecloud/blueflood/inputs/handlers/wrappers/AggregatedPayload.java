@@ -16,6 +16,8 @@
 
 package com.rackspacecloud.blueflood.inputs.handlers.wrappers;
 
+import com.rackspacecloud.blueflood.service.Configuration;
+import com.rackspacecloud.blueflood.service.CoreConfig;
 import com.rackspacecloud.blueflood.types.*;
 
 import java.util.AbstractList;
@@ -25,6 +27,9 @@ import java.util.Map;
 
 // Using nested classes for now. Expect this to be cleaned up.
 public class AggregatedPayload {
+    private static final long pastDiff = Configuration.getInstance().getLongProperty( CoreConfig.BEFORE_CURRENT_COLLECTIONTIME_MS );
+    private static final long futureDiff = Configuration.getInstance().getLongProperty( CoreConfig.AFTER_CURRENT_COLLECTIONTIME_MS );
+
     private String tenantId;
     private long timestamp; // millis since epoch.
     
@@ -35,6 +40,7 @@ public class AggregatedPayload {
     private BluefloodCounter[] counters;
     private BluefloodTimer[] timers;
     private BluefloodSet[] sets;
+    private BluefloodEnum[] enums;
     
     private Map<String, Object> metadata;
     
@@ -53,6 +59,21 @@ public class AggregatedPayload {
     public Collection<BluefloodCounter> getCounters() { return safeAsList(counters); }
     public Collection<BluefloodTimer> getTimers() { return safeAsList(timers); }
     public Collection<BluefloodSet> getSets() { return safeAsList(sets); }
+    public Collection<BluefloodEnum> getEnums() { return safeAsList(enums); }
+
+
+    public List<String> getValidationErrors() {
+
+        List<String> errors = new java.util.ArrayList<String>();
+        long current = System.currentTimeMillis();
+
+        if( timestamp > current + futureDiff )
+            errors.add( "'timestamp' '" + timestamp + "' is more than '" + futureDiff + "' milliseconds into the future." );
+        else if( timestamp < current - pastDiff )
+            errors.add( "'timestamp' '" + timestamp + "' is more than '" + pastDiff + "' milliseconds into the past." );
+
+        return errors;
+    }
 
     //@SafeVarargs (1.7 only doge)
     public static <T> List<T> safeAsList(final T... a) {
