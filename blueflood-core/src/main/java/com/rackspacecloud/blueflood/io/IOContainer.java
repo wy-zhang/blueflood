@@ -15,9 +15,14 @@
  */
 package com.rackspacecloud.blueflood.io;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
+import com.rackspacecloud.blueflood.io.astyanax.AstyanaxExcessEnumIO;
+import com.rackspacecloud.blueflood.io.astyanax.AstyanaxLocatorIO;
 import com.rackspacecloud.blueflood.io.astyanax.AstyanaxMetadataIO;
 import com.rackspacecloud.blueflood.io.astyanax.AstyanaxShardStateIO;
+import com.rackspacecloud.blueflood.io.datastax.DatastaxExcessEnumIO;
+import com.rackspacecloud.blueflood.io.datastax.DatastaxLocatorIO;
 import com.rackspacecloud.blueflood.io.datastax.DatastaxMetadataIO;
 import com.rackspacecloud.blueflood.io.datastax.DatastaxShardStateIO;
 import com.rackspacecloud.blueflood.service.Configuration;
@@ -34,21 +39,32 @@ public class IOContainer {
     // of them
 
     private static final Configuration configuration = Configuration.getInstance();
+    private static IOContainer FROM_CONFIG_INSTANCE = null;
 
     private ShardStateIO shardStateIO;
     private MetadataIO metadataIO;
+    private LocatorIO locatorIO;
+    private ExcessEnumIO excessEnumIO;
 
     // more IO classes to follow
 
     /**
-     * Creates an instance of this class based on what configuration says our
+     * Returns an instance of this class based on what configuration says our
      * driver should be.
      *
      * @return IOContainer
      */
-    public static IOContainer fromConfig() {
-        String driver = configuration.getStringProperty(CoreConfig.CASSANDRA_DRIVER);
-        return new IOContainer(DriverType.getDriverType(driver));
+    public static synchronized IOContainer fromConfig() {
+        if ( FROM_CONFIG_INSTANCE == null ) {
+                String driver = configuration.getStringProperty(CoreConfig.CASSANDRA_DRIVER);
+                FROM_CONFIG_INSTANCE = new IOContainer(DriverType.getDriverType(driver));
+        }
+        return FROM_CONFIG_INSTANCE;
+    }
+
+    @VisibleForTesting
+    static synchronized void resetInstance() {
+        FROM_CONFIG_INSTANCE = null;
     }
 
     /**
@@ -61,13 +77,17 @@ public class IOContainer {
 
         if ( driver == DriverType.DATASTAX ) {
 
-            shardStateIO = new DatastaxShardStateIO();
             metadataIO = new DatastaxMetadataIO();
+            shardStateIO = new DatastaxShardStateIO();
+            locatorIO = new DatastaxLocatorIO();
+            excessEnumIO = new DatastaxExcessEnumIO();
 
         } else {
 
-            shardStateIO = new AstyanaxShardStateIO();
             metadataIO = new AstyanaxMetadataIO();
+            shardStateIO = new AstyanaxShardStateIO();
+            locatorIO = new AstyanaxLocatorIO();
+            excessEnumIO = new AstyanaxExcessEnumIO();
         }
     }
 
@@ -83,6 +103,20 @@ public class IOContainer {
      */
     public MetadataIO getMetadataIO() {
         return metadataIO;
+    }
+
+    /**
+     * @return a class for reading/writing Locators
+     */
+    public LocatorIO getLocatorIO() {
+        return locatorIO;
+    }
+
+    /**
+     * @return a class for reading/writing Excess Enum Metrics
+     */
+    public ExcessEnumIO getExcessEnumIO() {
+        return excessEnumIO;
     }
 
     /**

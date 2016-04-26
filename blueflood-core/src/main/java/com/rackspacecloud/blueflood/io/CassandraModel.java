@@ -117,10 +117,11 @@ public class CassandraModel {
 
     private static final Collection<ColumnFamily> ALL_COLUMN_FAMILIES;
 
-    private static final ColumnFamilyMapper CF_NAME_TO_CF;
+    private static final ColumnFamilyMapper METRICS_GRAN_TO_CF;
     private static final ColumnFamilyMapper PREAG_GRAN_TO_CF;
     private static final ColumnFamilyMapper HIST_GRAN_TO_CF;
 
+    private static final Map<String, ColumnFamily<Locator, Long>> CF_NAME_TO_CF = new HashMap<String, ColumnFamily<Locator, Long>>();
     private static final Map<ColumnFamily<Locator, Long>, Granularity> CF_TO_GRAN;
 
     static {
@@ -156,8 +157,14 @@ public class CassandraModel {
         cfToGranMap.put(CF_METRICS_60M, Granularity.MIN_60);
         cfToGranMap.put(CF_METRICS_240M, Granularity.MIN_240);
         cfToGranMap.put(CF_METRICS_1440M, Granularity.MIN_1440);
+        cfToGranMap.put(CF_METRICS_PREAGGREGATED_FULL, Granularity.FULL);
+        cfToGranMap.put(CF_METRICS_PREAGGREGATED_5M, Granularity.MIN_5);
+        cfToGranMap.put(CF_METRICS_PREAGGREGATED_20M, Granularity.MIN_20);
+        cfToGranMap.put(CF_METRICS_PREAGGREGATED_60M, Granularity.MIN_60);
+        cfToGranMap.put(CF_METRICS_PREAGGREGATED_240M, Granularity.MIN_240);
+        cfToGranMap.put(CF_METRICS_PREAGGREGATED_1440M, Granularity.MIN_1440);
 
-        CF_NAME_TO_CF = new ColumnFamilyMapper() {
+        METRICS_GRAN_TO_CF = new ColumnFamilyMapper() {
             @Override
             public MetricColumnFamily get(Granularity gran) {
                 return columnFamilyMap.get(gran);
@@ -186,18 +193,37 @@ public class CassandraModel {
             cfs.add(cf);
         }
         ALL_COLUMN_FAMILIES = Collections.unmodifiableList(cfs);
+
+        for ( ColumnFamily cf : ALL_COLUMN_FAMILIES) {
+            CF_NAME_TO_CF.put(cf.getName(), cf);
+        }
     }
 
     public static MetricColumnFamily getColumnFamily(Class<? extends Rollup> type, Granularity granularity) {
         if (type.equals(SimpleNumber.class)) {
             return CF_METRICS_FULL;
         } else if (type.equals(BasicRollup.class)) {
-            return CF_NAME_TO_CF.get(granularity);
+            return METRICS_GRAN_TO_CF.get(granularity);
         } else if (type.equals(HistogramRollup.class)) {
             return HIST_GRAN_TO_CF.get(granularity);
         } else if (type.equals(BluefloodSetRollup.class) || type.equals(BluefloodTimerRollup.class) || type.equals(BluefloodGaugeRollup.class) ||
                 type.equals(BluefloodCounterRollup.class) || type.equals(BluefloodEnumRollup.class)) {
             return PREAG_GRAN_TO_CF.get(granularity);
+        } else {
+            throw new RuntimeException("Unsupported rollup type.");
+        }
+    }
+
+    public static String getColumnFamilyName(Class<? extends Rollup> type, Granularity granularity) {
+        if (type.equals(SimpleNumber.class)) {
+            return CF_METRICS_FULL_NAME;
+        } else if (type.equals(BasicRollup.class)) {
+            return METRICS_GRAN_TO_CF.get(granularity).getName();
+        } else if (type.equals(HistogramRollup.class)) {
+            return HIST_GRAN_TO_CF.get(granularity).getName();
+        } else if (type.equals(BluefloodSetRollup.class) || type.equals(BluefloodTimerRollup.class) || type.equals(BluefloodGaugeRollup.class) ||
+                type.equals(BluefloodCounterRollup.class) || type.equals(BluefloodEnumRollup.class)) {
+            return PREAG_GRAN_TO_CF.get(granularity).getName();
         } else {
             throw new RuntimeException("Unsupported rollup type.");
         }
@@ -217,6 +243,18 @@ public class CassandraModel {
         }
 
         return getColumnFamily(RollupType.classOf(type, gran), gran);
+    }
+
+    public static MetricColumnFamily getPreaggregatedColumnFamily(Granularity gran) {
+        return PREAG_GRAN_TO_CF.get(gran);
+    }
+
+    public static String getPreaggregatedColumnFamilyName(Granularity gran) {
+        return PREAG_GRAN_TO_CF.get(gran).getName();
+    }
+
+    public static ColumnFamily getColumnFamily(String columnFamilyName) {
+        return CF_NAME_TO_CF.get(columnFamilyName);
     }
 
     // iterate over all column families that store metrics.
@@ -243,6 +281,14 @@ public class CassandraModel {
                 };
             }
         };
+    }
+
+    public static Granularity getGranularity(ColumnFamily cf) {
+        return CF_TO_GRAN.get(cf);
+    }
+
+    public static Granularity getGranularity(String cf) {
+        return CF_TO_GRAN.get(CF_NAME_TO_CF.get(cf));
     }
 
     public static Collection<ColumnFamily> getAllColumnFamilies() {

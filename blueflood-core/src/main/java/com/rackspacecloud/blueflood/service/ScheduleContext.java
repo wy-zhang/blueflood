@@ -154,6 +154,17 @@ public class ScheduleContext implements IngestionContext, ScheduleContextMBean {
 
     public ScheduleContext(long currentTimeMillis, Collection<Integer> managedShards) {
         this(currentTimeMillis, managedShards, new DefaultClockImpl());
+    }
+    @VisibleForTesting
+    public ScheduleContext(long currentTimeMillis,
+                           Collection<Integer> managedShards,
+                           Clock clock,
+                           ShardStateManager shardStateManager,
+                           ShardLockManager shardLockManager) {
+        this.scheduleTime = currentTimeMillis;
+        this.shardStateManager = shardStateManager;
+        this.lockManager = shardLockManager;
+        this.clock = clock;
         registerMBean();
     }
 
@@ -252,17 +263,23 @@ public class ScheduleContext implements IngestionContext, ScheduleContextMBean {
         }
     }
 
-    private boolean areChildKeysOrSelfKeyScheduledOrRunning(SlotKey slotKey) {
+    boolean areChildKeysOrSelfKeyScheduledOrRunning(SlotKey slotKey) {
         // if any ineligible (children and self) keys are running or scheduled to run, we shouldn't work on this.
         Collection<SlotKey> ineligibleKeys = slotKey.getChildrenKeys();
 
-        if (runningSlots.keySet().contains(slotKey) || scheduledSlots.contains(slotKey)) {
+        if (runningSlots.keySet().contains(slotKey)) {
+            return true;
+        }
+        if (scheduledSlots.contains(slotKey)) {
             return true;
         }
 
         // if any ineligible keys are running or scheduled to run, do not schedule this key.
         for (SlotKey childrenKey : ineligibleKeys) {
-            if (runningSlots.keySet().contains(childrenKey) || scheduledSlots.contains(childrenKey)) {
+            if (runningSlots.keySet().contains(childrenKey)) {
+                return true;
+            }
+            if (scheduledSlots.contains(childrenKey)) {
                 return true;
             }
         }
@@ -336,6 +353,7 @@ public class ScheduleContext implements IngestionContext, ScheduleContextMBean {
                 // no need to set dirty/clean here.
                 shardStateManager.getSlotStateManager(shard, gran).getAndSetState(slot, UpdateStamp.State.Active);
                 scheduledSlots.add(key);
+                log.debug("pushBackToScheduled -> added to scheduledSlots: " + key + " size:" + scheduledSlots.size());
                 if (rescheduleImmediately) {
                     orderedScheduledSlots.add(0, key);
                 } else {
@@ -357,6 +375,13 @@ public class ScheduleContext implements IngestionContext, ScheduleContextMBean {
             UpdateStamp stamp = shardStateManager.getUpdateStamp(slotKey);
             shardStateManager.setAllCoarserSlotsDirtyForSlot(slotKey);
 
+            //When state gets set to "X", before it got persisted, it might get scheduled for rollup
+            //again, if we get delayed metrics. To prevent this we temporarily set last rollup time with current
+            //time. This value wont get persisted.
+            long currentTimeInMillis = clock.now().getMillis();
+            stamp.setLastRollupTimestamp(currentTimeInMillis);
+            log.debug("SlotKey {} is marked in memory with last rollup time as {}", slotKey, currentTimeInMillis);
+
             // Update the stamp to Rolled state if and only if the current state
             // is running. If the current state is active, it means we received
             // a delayed put which toggled the status to Active.
@@ -365,11 +390,6 @@ public class ScheduleContext implements IngestionContext, ScheduleContextMBean {
                 // Note: Rollup state will be updated to the last ACTIVE
                 // timestamp which caused rollup process to kick in.
                 stamp.setDirty(true);
-
-                //When state gets set to "X", before it got persisted, it might get scheduled for rollup
-                //again, if we get delayed metrics. To prevent this we temporarily set last rollup time with current
-                //time. This value wont get persisted.
-                stamp.setLastRollupTimestamp(clock.now().getMillis());
             }
         }
     }
@@ -460,7 +480,12 @@ public class ScheduleContext implements IngestionContext, ScheduleContextMBean {
         return results;
     }
 
-    private void registerMBean() {
+    private boolean isMbeanRegistered = false;
+    private synchronized void registerMBean() {
+
+        if (isMbeanRegistered) return;
+        isMbeanRegistered = true;
+
         try {
             final MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
             final String name = String.format("com.rackspacecloud.blueflood.io:type=%s", ScheduleContext.class.getSimpleName());

@@ -17,7 +17,6 @@
 package com.rackspacecloud.blueflood.io.astyanax;
 
 import com.codahale.metrics.Timer;
-import com.google.common.base.Function;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.ListMultimap;
@@ -26,9 +25,8 @@ import com.netflix.astyanax.Keyspace;
 import com.netflix.astyanax.connectionpool.OperationResult;
 import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
 import com.netflix.astyanax.connectionpool.exceptions.NotFoundException;
+import com.netflix.astyanax.connectionpool.exceptions.PoolTimeoutException;
 import com.netflix.astyanax.model.*;
-import com.netflix.astyanax.query.RowQuery;
-import com.netflix.astyanax.recipes.reader.AllRowsReader;
 import com.netflix.astyanax.serializers.AbstractSerializer;
 import com.netflix.astyanax.serializers.BooleanSerializer;
 import com.netflix.astyanax.serializers.StringSerializer;
@@ -45,7 +43,6 @@ import com.rackspacecloud.blueflood.outputs.formats.MetricData;
 import com.rackspacecloud.blueflood.rollup.Granularity;
 import com.rackspacecloud.blueflood.service.Configuration;
 import com.rackspacecloud.blueflood.service.CoreConfig;
-import com.rackspacecloud.blueflood.service.SlotState;
 import com.rackspacecloud.blueflood.types.*;
 import com.rackspacecloud.blueflood.utils.Util;
 import org.slf4j.Logger;
@@ -175,42 +172,13 @@ public class AstyanaxReader extends AstyanaxIO {
         }
     }
 
-    /**
-     * Returns the recently seen locators, i.e. those that should be rolled up, for a given shard.
-     * 'Should' means:
-     *  1) A locator is capable of rollup (it is not a string/boolean metric).
-     *  2) A locator has had new data in the past {@link AstyanaxWriter.LOCATOR_TTL} seconds.
-     *
-     * @param shard Number of the shard you want the recent locators for. 0-127 inclusive.
-     * @return Collection of locators
-     * @throws RuntimeException(com.netflix.astyanax.connectionpool.exceptions.ConnectionException)
-     */
-    public Collection<Locator> getLocatorsToRollup(long shard) {
-        Timer.Context ctx = Instrumentation.getReadTimerContext(CassandraModel.CF_METRICS_LOCATOR.getName());
-        try {
-            RowQuery<Long, Locator> query = keyspace
-                    .prepareQuery(CassandraModel.CF_METRICS_LOCATOR)
-                    .getKey(shard);
-            return query.execute().getResult().getColumnNames();
-        } catch (NotFoundException e) {
-            Instrumentation.markNotFound(CassandraModel.CF_METRICS_LOCATOR_NAME);
-            return Collections.emptySet();
-        } catch (ConnectionException e) {
-            Instrumentation.markReadError(e);
-            log.error("Error reading locators", e);
-            throw new RuntimeException("Error reading locators", e);
-        } finally {
-            ctx.stop();
-        }
-    }
-
     private ColumnList<Long> getColumnsFromDB(final Locator locator, ColumnFamily<Locator, Long> srcCF, Range range) {
         List<Locator> locators = new LinkedList<Locator>(){{ add(locator); }};
         ColumnList<Long> columns = getColumnsFromDB(locators, srcCF, range).get(locator);
         return columns == null ? new EmptyColumnList<Long>() : columns;
     }
 
-    private Map<Locator, ColumnList<Long>> getColumnsFromDB(List<Locator> locators, ColumnFamily<Locator, Long> CF,
+    protected Map<Locator, ColumnList<Long>> getColumnsFromDB(List<Locator> locators, ColumnFamily<Locator, Long> CF,
                                                             Range range) {
         if (range.getStart() > range.getStop()) {
             throw new RuntimeException(String.format("Invalid rollup range: ", range.toString()));
@@ -378,6 +346,7 @@ public class AstyanaxReader extends AstyanaxIO {
                 }
             } catch (Exception e) {
                 // pass for now. need metric to figure this stuff out.
+                log.error(String.format("error getting datapoints for locator %s, range %s, granularity %s", locator, range.toString(), gran.toString()), e);
             }
         }
 
@@ -434,7 +403,7 @@ public class AstyanaxReader extends AstyanaxIO {
         return new MetricData(points, getUnitString(locator), MetricData.Type.STRING);
     }
 
-    public MetricData getEnumMetricDataForRange(final Locator locator, final Range range, Granularity gran) {
+    protected MetricData getEnumMetricDataForRange(final Locator locator, final Range range, Granularity gran) {
         Map<Locator, MetricData> metricDataMap = getEnumMetricDataForRangeForLocatorList(new ArrayList<Locator>(){{add (locator); }}, range, gran);
         return metricDataMap.get(locator);
     }
@@ -570,43 +539,7 @@ public class AstyanaxReader extends AstyanaxIO {
             return new Points.Point(column.getName(), column.getValue(serializer));
     }
 
-
-
-    /**
-     * Gets all the ExcessEnum Metrics Locators
-     *
-     */
-    public Set<Locator> getExcessEnumMetrics() throws Exception{
-        final Set<Locator> excessEnumMetrics = new HashSet<Locator>();
-        Function<Row<Locator, Long>, Boolean> rowFunction = new Function<Row<Locator, Long>, Boolean>() {
-            @Override
-            public Boolean apply(Row<Locator, Long> row) {
-                excessEnumMetrics.add(row.getKey());
-                return true;
-            }
-        };
-
-        ColumnFamily CF = CassandraModel.CF_METRICS_EXCESS_ENUMS;
-        Timer.Context ctx = Instrumentation.getBatchReadTimerContext(CF.getName());
-        try {
-            // Get all the Row Keys
-            new AllRowsReader.Builder<Locator, Long>(keyspace, CassandraModel.CF_METRICS_EXCESS_ENUMS)
-                    .withColumnRange(null, null, false, 0)
-                    .forEachRow(rowFunction)
-                    .build()
-                    .call();
-        } catch (ConnectionException e) {
-            log.error("Error reading ExcessEnum Metrics Table", e);
-            Instrumentation.markReadError(e);
-            Instrumentation.markExcessEnumReadError();
-            throw new RuntimeException(e);
-        } finally {
-            ctx.stop();
-        }
-        return excessEnumMetrics;
-    }
-
-    public <T extends Rollup> Points<T> transformEnumValueHashesToStrings(MetricData metricData, ColumnList<Long> enumvalues) {
+    private <T extends Rollup> Points<T> transformEnumValueHashesToStrings(MetricData metricData, ColumnList<Long> enumvalues) {
         Map<Long, String> hash2enumValues = getEnumValueFromHashes(enumvalues);
         Points<T> pointsEnum = new Points<T>();
 
@@ -623,7 +556,7 @@ public class AstyanaxReader extends AstyanaxIO {
         return pointsEnum;
     }
 
-    public Map<Long, String> getEnumValueFromHashes(ColumnList<Long> enumValues) {
+    private Map<Long, String> getEnumValueFromHashes(ColumnList<Long> enumValues) {
         HashMap<Long,String> hash2enumValues = new HashMap<Long, String>();
 
         for (Column<Long> col: enumValues) {
@@ -633,7 +566,18 @@ public class AstyanaxReader extends AstyanaxIO {
         return hash2enumValues;
     }
 
-    public Map<Locator, ColumnList<Long>> getEnumHashMappings(final List<Locator> locators) {
+
+    /**
+     * This method locates all values of enums from metrics_enum column family by their {@link com.rackspacecloud.blueflood.types.Locator}.
+     * The result is organized in a map of Locator -> ColumnList. The ColumnList is a list
+     * of columns, each column is a pair of name and value. The name will be the hash
+     * value of an enum, and the value would be the string value of the enum.
+     *
+     * @param locators
+     * @return
+     */
+    private Map<Locator, ColumnList<Long>> getEnumHashMappings(final List<Locator> locators) {
+
         final Map<Locator, ColumnList<Long>> columns = new HashMap<Locator, ColumnList<Long>>();
 
         try {
@@ -656,8 +600,17 @@ public class AstyanaxReader extends AstyanaxIO {
         return columns;
     }
 
-    public Map<Locator, ArrayList<String>> getEnumStringMappings(final List<Locator> locators) {
-        final Map<Locator, ArrayList<String>> map = new HashMap<Locator, ArrayList<String>>();
+    /**
+     * This method locates all values of enums from metrics_enum column family by their {@link com.rackspacecloud.blueflood.types.Locator}.
+     * The result is organized in a map of Locator -> list of String. The string
+     * is the string enum values.
+     *
+     * @param locators
+     * @return
+     */
+    public Map<Locator, List<String>> getEnumStringMappings(final List<Locator> locators) {
+        // TODO: add this to our read/write metrics
+        final Map<Locator, List<String>> map = new HashMap<Locator, List<String>>();
 
         try {
             OperationResult<Rows<Locator, Long>> query = getKeyspace()
@@ -667,19 +620,21 @@ public class AstyanaxReader extends AstyanaxIO {
 
             for (Row<Locator, Long> row : query.getResult()) {
                 ColumnList<Long> cols = row.getColumns();
-                ArrayList<String> enumStrings = new ArrayList<String>();
+                List<String> enumStrings = new ArrayList<String>();
                 for (Column col : cols) {
                     enumStrings.add(col.getStringValue());
                 }
                 map.put(row.getKey(), enumStrings);
             }
+        } catch (PoolTimeoutException ex) {
+            Instrumentation.markPoolExhausted();
+            Instrumentation.markReadError();
+        } catch( NotFoundException ex) {
+            // TODO: Not really sure what happens when one of the keys is not found.
+            Instrumentation.markNotFound(CassandraModel.CF_METRICS_ENUM_NAME);
         } catch (ConnectionException e) {
-            if (e instanceof NotFoundException) { // TODO: Not really sure what happens when one of the keys is not found.
-                Instrumentation.markNotFound(CassandraModel.CF_METRICS_ENUM_NAME);
-            } else {
-                log.warn("Enum String read query failed for column family " + CassandraModel.CF_METRICS_ENUM_NAME, e);
-                Instrumentation.markReadError(e);
-            }
+            log.warn("Enum String read query failed for column family " + CassandraModel.CF_METRICS_ENUM_NAME, e);
+            Instrumentation.markReadError();
         }
         return map;
     }
