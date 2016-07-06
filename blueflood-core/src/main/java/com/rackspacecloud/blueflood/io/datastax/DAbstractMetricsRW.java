@@ -3,6 +3,7 @@ package com.rackspacecloud.blueflood.io.datastax;
 import com.codahale.metrics.Timer;
 import com.datastax.driver.core.ResultSetFuture;
 import com.google.common.collect.Table;
+import com.rackspacecloud.blueflood.cache.MetadataCache;
 import com.rackspacecloud.blueflood.exceptions.CacheException;
 import com.rackspacecloud.blueflood.exceptions.InvalidDataException;
 import com.rackspacecloud.blueflood.io.*;
@@ -134,7 +135,7 @@ public abstract class DAbstractMetricsRW extends AbstractMetricsRW {
             for (Locator locator : locators) {
                 try {
 
-                    String rType = metadataCache.get( locator, MetricMetadata.ROLLUP_TYPE.name().toLowerCase() );
+                    String rType = MetadataCache.getInstance().get(locator, MetricMetadata.ROLLUP_TYPE.name().toLowerCase());
 
                     DAbstractMetricIO io = getIO( rType, granularity );
 
@@ -221,6 +222,8 @@ public abstract class DAbstractMetricsRW extends AbstractMetricsRW {
                                                               Map<Locator, DAbstractMetricIO> locatorIO,
                                                               Granularity granularity) {
 
+        MetadataCache metadataCache = MetadataCache.getInstance();
+
         // iterate through all ResultSetFuture
         Map<Locator, MetricData> locatorMetricDataMap = new HashMap<Locator, MetricData>();
         for (Map.Entry<Locator, List<ResultSetFuture>> entry : resultSets.entrySet() ) {
@@ -240,13 +243,13 @@ public abstract class DAbstractMetricsRW extends AbstractMetricsRW {
                 Points points = convertToPoints( tsRollupMap );
 
                 // get the dataType for this locator
-                DataType dataType = getDataType( locator, MetricMetadata.TYPE.name().toLowerCase() );
+                DataType dataType = getDataType( locator );
 
                 RollupType rollupType = getRollupType( tsRollupMap );
 
                 // create MetricData
                 MetricData.Type outputType = MetricData.Type.from( rollupType, dataType );
-                MetricData metricData = new MetricData( points, getUnitString( locator ), outputType );
+                MetricData metricData = new MetricData( points, metadataCache.getUnitString( locator ), outputType );
                 locatorMetricDataMap.put( locator, metricData );
 
             } catch (CacheException ex) {

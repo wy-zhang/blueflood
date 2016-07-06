@@ -20,7 +20,6 @@ import com.github.tlrx.elasticsearch.test.EsSetup;
 import com.rackspacecloud.blueflood.inputs.handlers.HttpEventsIngestionHandler;
 import com.rackspacecloud.blueflood.inputs.handlers.HttpMetricsIngestionServer;
 import com.rackspacecloud.blueflood.io.*;
-import com.rackspacecloud.blueflood.io.astyanax.AstyanaxMetricsWriter;
 import com.rackspacecloud.blueflood.service.*;
 import com.rackspacecloud.blueflood.types.Event;
 import com.rackspacecloud.blueflood.utils.ModuleLoader;
@@ -47,7 +46,7 @@ import static com.rackspacecloud.blueflood.TestUtils.*;
 
 public class HttpIntegrationTestBase {
 
-    public static final long TIME_DIFF_MS = 20000;
+    public static final long TIME_DIFF_MS = 40000;
 
     protected static HttpClient client;
     protected static ScheduleContext context;
@@ -102,11 +101,11 @@ public class HttpIntegrationTestBase {
         ((EnumElasticIO) ModuleLoader.getInstance(DiscoveryIO.class, CoreConfig.ENUMS_DISCOVERY_MODULES)).setClient(esSetup.client());
 
         // setup ingestion server
-        HttpMetricsIngestionServer server = new HttpMetricsIngestionServer(context, new AstyanaxMetricsWriter());
+        HttpMetricsIngestionServer server = new HttpMetricsIngestionServer(context);
         server.setHttpEventsIngestionHandler(new HttpEventsIngestionHandler(eventsSearchIO));
         httpIngestionService = new HttpIngestionService();
         httpIngestionService.setMetricsIngestionServer(server);
-        httpIngestionService.startService(context, new AstyanaxMetricsWriter());
+        httpIngestionService.startService(context);
 
         // setup query server
         httpQueryService = new HttpQueryService();

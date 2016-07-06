@@ -3,6 +3,7 @@ package com.rackspacecloud.blueflood.io.datastax;
 import com.codahale.metrics.Timer;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.ResultSetFuture;
+import com.rackspacecloud.blueflood.cache.MetadataCache;
 import com.rackspacecloud.blueflood.exceptions.CacheException;
 import com.rackspacecloud.blueflood.io.*;
 import com.rackspacecloud.blueflood.outputs.formats.MetricData;
@@ -131,35 +132,26 @@ public class DBasicMetricsRW extends DAbstractMetricsRW {
 
         for ( Locator locator : locators ) {
 
-            Object type;
+            DataType metricType;
             try {
-
-                System.out.println("metadata=" + metadataCache);
-                type = metadataCache.get( locator, DATA_TYPE_CACHE_KEY );
-
+                metricType = getDataType(locator);
             } catch ( CacheException e ) {
                 LOG.error(String.format("Error looking up locator %s in cache", locator), e);
                 unknowns.add( locator );
                 continue;
             }
 
-
-            DataType metricType = new DataType( (String) type );
-
-            if ( type == null || !DataType.isKnownMetricType( metricType ) ) {
-
+            if ( !DataType.isKnownMetricType( metricType ) ) {
                 unknowns.add( locator );
                 continue;
             } else if ( metricType.equals( DataType.STRING ) ) {
-
                 strings.add( locator );
                 continue;
             } else if ( metricType.equals( DataType.BOOLEAN ) ) {
-
                 booleans.add( locator );
                 continue;
             } else {
-
+                // numeric goes here
                 numerics.add( locator );
             }
         }
@@ -168,7 +160,7 @@ public class DBasicMetricsRW extends DAbstractMetricsRW {
 
         String columnFamily = CassandraModel.getBasicColumnFamilyName( gran );
 
-        metrics.putAll( super.getDatapointsForRange( locators, range, columnFamily, gran ) );
+        metrics.putAll( super.getDatapointsForRange( numerics, range, columnFamily, gran ) );
         metrics.putAll( getBooleanDataForRange( booleans, range ) );
         metrics.putAll( getStringDataForRange( strings, range ) );
         metrics.putAll( getNumericOrStringDataForRange( unknowns, range, columnFamily, gran ) );
@@ -258,6 +250,7 @@ public class DBasicMetricsRW extends DAbstractMetricsRW {
 
         Timer.Context ctx = Instrumentation.getReadTimerContext( CassandraModel.CF_METRICS_STRING_NAME );
 
+        MetadataCache metadataCache = MetadataCache.getInstance();
         try {
 
             Map<Locator, MetricData> metrics = new HashMap<Locator, MetricData>();
@@ -271,7 +264,8 @@ public class DBasicMetricsRW extends DAbstractMetricsRW {
 
                 try {
 
-                    metrics.put( future.getKey(), rawIO.createMetricDataStringBoolean( future.getValue(), isBoolean, getUnitString( future.getKey() ) ) );
+                    metrics.put( future.getKey(), rawIO.createMetricDataStringBoolean( future.getValue(),
+                            isBoolean, metadataCache.getUnitString( future.getKey() ) ) );
                 }
                 catch (Exception e ) {
 

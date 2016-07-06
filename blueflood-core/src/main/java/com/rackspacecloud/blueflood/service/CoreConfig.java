@@ -90,12 +90,16 @@ public enum CoreConfig implements ConfigDefaults {
     SHARD_PUSH_PERIOD("2000"),
     SHARD_PULL_PERIOD("20000"),
 
+    // blueflood uses zookeeper to acquire locks before working on shards
+    ZOOKEEPER_CLUSTER("NONE"),
+
     // 20 min
     SHARD_LOCK_HOLD_PERIOD_MS("1200000"),
     // 1 min
     SHARD_LOCK_DISINTERESTED_PERIOD_MS("60000"),
     // 2 min
     SHARD_LOCK_SCAVENGE_INTERVAL_MS("120000"),
+    MAX_ZK_LOCKS_TO_ACQUIRE_PER_CYCLE("1"),
 
     INTERNAL_API_CLUSTER("127.0.0.1:50020,127.0.0.1:50020"),
 
@@ -139,8 +143,6 @@ public enum CoreConfig implements ConfigDefaults {
     // valid options are: GEOMETRIC, LINEAR, and LESSTHANEQUAL
     GET_BY_POINTS_GRANULARITY_SELECTION("GEOMETRIC"),
 
-    IMETRICS_WRITER("com.rackspacecloud.blueflood.io.astyanax.AstyanaxMetricsWriter"),
-
     METADATA_CACHE_PERSISTENCE_ENABLED("false"),
     METADATA_CACHE_PERSISTENCE_PATH("/dev/null"),
     METADATA_CACHE_PERSISTENCE_PERIOD_MINS("10"),
@@ -154,6 +156,7 @@ public enum CoreConfig implements ConfigDefaults {
     TENANTIDS_TO_KEEP(""),
     TRACKER_DELAYED_METRICS_MILLIS("300000"),
 
+    SHOULD_STORE_UNITS("true"),
     USE_ES_FOR_UNITS("false"),
     // Should at least be equal to the number of the netty worker threads, if http module is getting loaded
     ES_UNIT_THREADS("50"),

@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 Rackspace
+ * Copyright 2016 Rackspace
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -14,15 +14,15 @@
  *    limitations under the License.
  */
 
-package com.rackspacecloud.blueflood.io;
+package com.rackspacecloud.blueflood.types;
 
-import com.rackspacecloud.blueflood.types.IMetric;
-import com.rackspacecloud.blueflood.types.Metric;
-
-import java.io.IOException;
-import java.util.Collection;
-
-public interface IMetricsWriter {
-    void insertFullMetrics(Collection<? extends IMetric> metrics) throws Exception;
-    void insertPreaggreatedMetrics(Collection<IMetric> metrics) throws Exception;
+/**
+ * Interface for sub-metrics provided by BaseRollup.
+ */
+public interface IBaseRollup {
+    public AbstractRollupStat getAverage();
+    public AbstractRollupStat getVariance();
+    public AbstractRollupStat getMinValue();
+    public AbstractRollupStat getMaxValue();
+    public long getCount();
 }

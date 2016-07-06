@@ -15,17 +15,18 @@
  */
 package com.rackspacecloud.blueflood.outputs;
 
-import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
-import com.rackspacecloud.blueflood.exceptions.GranularityException;
-import com.rackspacecloud.blueflood.io.astyanax.AstyanaxReader;
-import com.rackspacecloud.blueflood.io.astyanax.AstyanaxWriter;
+import com.rackspacecloud.blueflood.io.AbstractMetricsRW;
+import com.rackspacecloud.blueflood.io.IOContainer;
 import com.rackspacecloud.blueflood.io.CassandraModel;
 import com.rackspacecloud.blueflood.io.IntegrationTestBase;
+import com.rackspacecloud.blueflood.io.astyanax.ABasicMetricsRW;
+import com.rackspacecloud.blueflood.io.datastax.DBasicMetricsRW;
 import com.rackspacecloud.blueflood.outputs.formats.MetricData;
 import com.rackspacecloud.blueflood.outputs.handlers.RollupHandler;
 import com.rackspacecloud.blueflood.rollup.Granularity;
 import com.rackspacecloud.blueflood.service.SingleRollupWriteContext;
 import com.rackspacecloud.blueflood.types.*;
+
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
@@ -64,6 +65,11 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
     private long startRollupMS = startMS + (1000 * 60 * 60 * (hours/2 - 5));
     private long endRollupMS = startMS + (1000 * 60 * 60 * (hours/2));
 
+    // max possible value for random generator of metric values
+    private final int MAX_METRIC_VALUE = 100;
+    // epsilon for assert of differences between mean of full points and mean of coarser granularity (rolled) points
+    private final double MEAN_EPSILON = 0.0025 * MAX_METRIC_VALUE;
+
     @Before
     public void initData() throws Exception {
 
@@ -72,21 +78,23 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
             locatorList.add( Locator.createLocatorFromPathComponents( acctId, metric ) );
         }
 
-        AstyanaxWriter writer = AstyanaxWriter.getInstance();
-        AstyanaxReader reader = AstyanaxReader.getInstance();
+        AbstractMetricsRW basicMetricsRW = IOContainer.fromConfig().getBasicMetricsRW();
 
-        writeFullData( writer );
-        writeRollups( reader, writer );
+        writeFullData( basicMetricsRW );
+        writeRollups( basicMetricsRW );
     }
 
-    private void writeRollups( AstyanaxReader reader, AstyanaxWriter writer ) throws GranularityException, java.io.IOException, ConnectionException {
+    private void writeRollups( AbstractMetricsRW metricsRW ) throws Exception {
 
 
         for( Locator locator : locatorList ) {
             ArrayList<SingleRollupWriteContext> writes = new ArrayList<SingleRollupWriteContext>();
             for ( Range range : Range.getRangesToRollup( Granularity.FULL, startRollupMS, endRollupMS ) ) {
                 // each range should produce one average
-                Points<SimpleNumber> input = reader.getDataToRoll( SimpleNumber.class, locator, range, CassandraModel.CF_METRICS_FULL );
+                Points<SimpleNumber> input = metricsRW.getDataToRollup(
+                                                    locator,
+                                                    RollupType.BF_BASIC,
+                                                    range, CassandraModel.CF_METRICS_FULL_NAME );
                 BasicRollup basicRollup = BasicRollup.buildRollupFromRawSamples( input );
 
                 writes.add( new SingleRollupWriteContext( basicRollup,
@@ -95,19 +103,19 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
                         CassandraModel.getColumnFamily( BasicRollup.class, Granularity.FULL.coarser() ),
                         range.start ) );
             }
-            writer.insertRollups( writes );
+            metricsRW.insertRollups( writes );
         }
     }
 
-    private void writeFullData( AstyanaxWriter writer ) throws Exception {
+    private void writeFullData( AbstractMetricsRW writer ) throws Exception {
 
         // insert something every minute for 48h
         for ( Locator locator : locatorList ) {
             for ( int i = 0; i < 60 * hours; i++ ) {
                 final long curMillis = startMS + i * 60000;
-                List<Metric> metrics = new ArrayList<Metric>();
-                metrics.add( getRandomIntMetricMaxValue( locator, curMillis, 100 ) );
-                writer.insertFull( metrics );
+                List<IMetric> metrics = new ArrayList<IMetric>();
+                metrics.add( getRandomIntMetricMaxValue( locator, curMillis, MAX_METRIC_VALUE ) );
+                writer.insertMetrics(metrics);
             }
         }
     }
@@ -128,13 +136,11 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
             Assert.assertEquals( repairedRanges.next().getStart(), timestamp.longValue() );
         }
 
-        /* TODO:  Fix with CMD-1001
         // test value
-        double fullMean = fullPointsMean( metric, locator, startMS, endRollupMS );
+        double fullMean = fullPointsMean( metric, locator, Granularity.MIN_5.snapMillis(startMS), endRollupMS );
         double rollMean = meanOfPointCollectionRoll( points.values() );
 
-        Assert.assertEquals( rollMean, fullMean, getEpsilon( fullMean, rollMean ) );
-        */
+        Assert.assertEquals( fullMean, rollMean, MEAN_EPSILON );
     }
 
     @Test
@@ -153,13 +159,11 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
             Assert.assertEquals( repairedRanges.next().getStart(), timestamp.longValue() );
         }
 
-        /* TODO:  Fix with CMD-1001
         // test value
-        double fullMean = fullPointsMean( metric, locator, startRollupMS, endMS );
+        double fullMean = fullPointsMean( metric, locator, Granularity.MIN_5.snapMillis(startRollupMS), endMS );
         double rollMean = meanOfPointCollectionRoll( points.values() );
 
-        Assert.assertEquals( rollMean, fullMean, getEpsilon( fullMean, rollMean ) );
-        */
+        Assert.assertEquals( fullMean, rollMean, MEAN_EPSILON );
     }
 
     @Test
@@ -176,18 +180,18 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
         Map<Locator, MetricData> metricDataMap = rollupHandler.getRollupByGranularity(acctId, metric, start, endMS, Granularity.MIN_5);
         Map<Long, Points.Point<BasicRollup>> points = metricDataMap.get(locator).getData().getPoints();
 
+        Assert.assertNotEquals("there are more than one points fetched", 0, points.size());
+
         Iterator<Range> repairedRanges = Range.getRangesToRollup(Granularity.FULL, start, endMS).iterator();
         for (Long timestamp : points.keySet()) {
             Assert.assertEquals(repairedRanges.next().getStart(), timestamp.longValue() );
         }
 
-        /* TODO:  Fix with CMD-1001
         // test value
-        double fullMean = fullPointsMean( metric, locator, start, endMS );
+        double fullMean = fullPointsMean( metric, locator, Granularity.MIN_5.snapMillis(start), endMS );
         double rollMean = meanOfPointCollectionRoll( points.values() );
 
-        Assert.assertEquals( rollMean, fullMean, getEpsilon( fullMean, rollMean ) );
-        */
+        Assert.assertEquals( fullMean, rollMean, MEAN_EPSILON );
     }
 
     @Test
@@ -208,13 +212,11 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
                 Assert.assertEquals( repairedRanges.next().getStart(), timestamp.longValue() );
             }
 
-            /* TODO:  Fix with CMD-1001
             // test value
-            double fullMean = fullPointsMean( metric, locator, startMS, endRollupMS );
+            double fullMean = fullPointsMean( metric, locator, Granularity.MIN_5.snapMillis(startMS), endRollupMS );
             double rollMean = meanOfPointCollectionRoll( points.values() );
 
-            Assert.assertEquals( rollMean, fullMean, getEpsilon( fullMean, rollMean ) );
-            */
+            Assert.assertEquals( fullMean, rollMean, MEAN_EPSILON );
         }
     }
 
@@ -236,13 +238,11 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
                 Assert.assertEquals( repairedRanges.next().getStart(), timestamp.longValue() );
             }
 
-            /* TODO:  Fix with CMD-1001
             // test value
-            double fullMean = fullPointsMean( metric, locator, startMS, endRollupMS );
+            double fullMean = fullPointsMean( metric, locator, Granularity.MIN_5.snapMillis(startRollupMS), endMS );
             double rollMean = meanOfPointCollectionRoll( points.values() );
 
-            Assert.assertEquals( rollMean, fullMean, getEpsilon( fullMean, rollMean ) );
-            */
+            Assert.assertEquals( fullMean, rollMean, MEAN_EPSILON );
         }
     }
 
@@ -267,13 +267,11 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
                 Assert.assertEquals( repairedRanges.next().getStart(), timestamp.longValue() );
             }
 
-            /* TODO:  Fix with CMD-1001
             // test value
-            double fullMean = fullPointsMean( metric, locator, start, endMS );
+            double fullMean = fullPointsMean( metric, locator, Granularity.MIN_5.snapMillis(start), endMS );
             double rollMean = meanOfPointCollectionRoll( points.values() );
 
-            Assert.assertEquals( rollMean, fullMean, getEpsilon( fullMean, rollMean ) );
-            */
+            Assert.assertEquals( fullMean, rollMean, MEAN_EPSILON );
         }
     }
 
@@ -288,13 +286,13 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
     }
 
     private double meanOfPointCollectionRoll( Collection<Points.Point<BasicRollup>> fullPoints ) {
-        long sum = 0;
+        double sum = 0;
         for( Points.Point<BasicRollup> p : fullPoints ) {
 
             sum += p.getData().getAverage().toLong();
         }
 
-        return sum / fullPoints.size();
+        return sum / (double) fullPoints.size();
     }
 
     private double fullPointsMean( List<String> metric, Locator locator, long start, long end ) {
@@ -303,10 +301,5 @@ public class RollupHandlerIntegrationTest extends IntegrationTestBase {
                 .get( locator ).getData().getPoints().values();
         return meanOfPointCollectionFull( fullPoints );
     }
-
-    private double getEpsilon( double fullMean, double rollMean ) {
-        return Math.abs( Math.max(fullMean, rollMean) * .05 );
-    }
-
 
 }
